@@ -1,10 +1,3 @@
-#
-# TODO:
-#   - Figure out why this works with puppet apply and not puppet agent -t
-#   - Look into caching values
-#   - Test the options: default_field, default_field_behavior, and default_field_parse
-#
-
 Puppet::Functions.create_function(:hiera_vault) do
 
   begin
@@ -25,7 +18,6 @@ Puppet::Functions.create_function(:hiera_vault) do
   end
 
   def lookup_key(key, options, context)
-
     if confine_keys = options['confine_to_keys']
       raise ArgumentError, '[hiera-vault] confine_to_keys must be an array' unless confine_keys.is_a?(Array)
 
@@ -43,21 +35,25 @@ Puppet::Functions.create_function(:hiera_vault) do
       end
     end
 
-    result = vault_get(key, options, context)
-
-    return result
+    value = vault_get(key, options, context)
+    if value == nil
+      context.not_found
+    end
+    return value
   end
 
+  def normalize_key(key)
+    # vault_storage::x::y::z -> x::y::z
+    key = key.split('vault_storage::')[1]
+    # x::y::z -> [x, y, z]
+    key = key.split('::')
+
+    # [x, y, z] -> [x/y, z]
+    return [key[0..-2].join('/'), key[-1].to_sym]
+  end
 
   def vault_get(key, options, context)
-
-    if ! ['string','json',nil].include?(options['default_field_parse'])
-      raise ArgumentError, "[hiera-vault] invalid value for default_field_parse: '#{options['default_field_behavior']}', should be one of 'string','json'"
-    end
-
-    if ! ['ignore','only',nil].include?(options['default_field_behavior'])
-      raise ArgumentError, "[hiera-vault] invalid value for default_field_behavior: '#{options['default_field_behavior']}', should be one of 'ignore','only'"
-    end
+    value_path, value_key = normalize_key(key)
 
     begin
       vault = Vault::Client.new
@@ -84,12 +80,11 @@ Puppet::Functions.create_function(:hiera_vault) do
 
     answer = nil
 
-    generic = options['mounts']['generic'].dup
-    generic ||= [ '/secret' ]
+    kv2 = options['mounts']['kv2']
 
-    # Only generic mounts supported so far
-    generic.each do |mount|
-      path = context.interpolate(mount) + key
+    # Only kv2 mounts supported so far
+    kv2.each do |mount|
+      path = context.interpolate(mount) + value_path
       context.explain { "[hiera-vault] Looking in path #{path}" }
 
       begin
@@ -102,31 +97,13 @@ Puppet::Functions.create_function(:hiera_vault) do
 
       next if secret.nil?
 
-      context.explain { "[hiera-vault] Read secret: #{key}" }
-      if (options['default_field'] && ['ignore', nil].include?(options['default_field_behavior'])) ||
-         (secret.data.has_key?(options['default_field'].to_sym) && secret.data.length == 1)
+      context.explain { "[hiera-vault] Read secret: #{value_path} #{value_key}" }
 
-        return nil if ! secret.data.has_key?(options['default_field'].to_sym)
+      # in case of KV v2 secret.data contains dict with :data key inside
+      data = secret.data[:data] || {}
 
-        new_answer = secret.data[options['default_field'].to_sym]
-
-        if options['default_field_parse'] == 'json'
-          begin
-            new_answer = JSON.parse(new_answer)
-          rescue JSON::ParserError => e
-            context.explain { "[hiera-vault] Could not parse string as json: #{e}" }
-          end
-        end
-
-      else
-        # Turn secret's hash keys into strings
-        new_answer = secret.data.inject({}) { |h, (k, v)| h[k.to_s] = v; h }
-      end
-
-#      context.explain {"[hiera-vault] Data: #{new_answer}:#{new_answer.class}" }
-
-      if ! new_answer.nil?
-        answer = new_answer
+      if data.has_key?(value_key)
+        answer = data[value_key]
         break
       end
     end
