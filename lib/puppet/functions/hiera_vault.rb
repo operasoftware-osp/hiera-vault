@@ -43,17 +43,18 @@ Puppet::Functions.create_function(:hiera_vault) do
   end
 
   def normalize_key(key)
-    # vault_storage::x::y::z -> x::y::z
+    # vault_storage::a::b::c::d -> a::b::c::d
     key = key.split('vault_storage::')[1]
-    # x::y::z -> [x, y, z]
+    # a::b::c::d -> [a, b, c, d]
     key = key.split('::')
 
-    # [x, y, z] -> [x/y, z]
-    return [key[0..-2].join('/'), key[-1].to_sym]
+    # [a, b, c, d] -> [a, b/c, :d]
+    return [key[0], key[1..-2].join('/'), key[-1].to_sym]
   end
 
   def vault_get(key, options, context)
-    value_path, value_key = normalize_key(key)
+    # vault_storage::common::some::strange::path::some_key => [common, some/strange/path, :some_key]
+    scope, value_path, value_key = normalize_key(key)
 
     begin
       vault = Vault::Client.new
@@ -80,11 +81,16 @@ Puppet::Functions.create_function(:hiera_vault) do
 
     answer = nil
 
-    kv2 = options['mounts']['kv2']
-
     # Only kv2 mounts supported so far
-    kv2.each do |mount|
-      path = context.interpolate(mount) + value_path
+    allowed_mounts = interpolate(context, options['mounts']['kv2'])
+    allowed_mounts.each do |mount|
+      unless mount.end_with?('/')
+        mount = "#{mount}/"
+      end
+      unless mount.end_with?("/#{scope}/")
+        next
+      end
+      path = mount + value_path
       context.explain { "[hiera-vault] Looking in path #{path}" }
 
       begin
@@ -109,5 +115,32 @@ Puppet::Functions.create_function(:hiera_vault) do
     end
 
     return answer
+  end
+
+  private
+
+  def interpolate(context, mounts)
+    allowed_mounts = []
+    mounts.each do |mount|
+      mount = context.interpolate(mount)
+      # secret/puppet/scope1,scope2 => [[secret], [puppet], [scope1, scope2]]
+      segments = mount.split('/').map { |segment| segment.split(',') }
+      allowed_mounts += build_mounts(segments, [""])
+    end
+    return allowed_mounts
+  end
+
+  def build_mounts(segments, current_paths) 
+    if segments.empty?
+      return current_paths
+    end
+    segment = segments.shift()
+    new_paths = []
+    current_paths.each do |path|
+      segment.each do |s|
+        new_paths.push(path + '/' + s)
+      end
+    end
+    return build_mounts(segments, new_paths)
   end
 end
