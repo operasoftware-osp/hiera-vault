@@ -84,13 +84,12 @@ Puppet::Functions.create_function(:hiera_vault) do
     # Only kv2 mounts supported so far
     allowed_mounts = interpolate(context, options['mounts']['kv2'])
     allowed_mounts.each do |mount|
-      unless mount.end_with?('/')
-        mount = "#{mount}/"
-      end
-      unless mount.end_with?("/#{scope}/")
+      mount = rstrip(mount, '/')
+      context.explain { "[hiera-vault] Looking for scope #{scope} under #{mount}" }
+      unless mount.end_with?("/#{scope}")
         next
       end
-      path = mount + value_path
+      path = rstrip(File.join(mount, value_path), '/')
       context.explain { "[hiera-vault] Looking in path #{path}" }
 
       begin
@@ -143,4 +142,12 @@ Puppet::Functions.create_function(:hiera_vault) do
     end
     return build_mounts(segments, new_paths)
   end
+
+  def rstrip(v, c)
+    if v.end_with?(c)
+      return v[0..-2]
+    end
+    return v
+  end
+
 end
