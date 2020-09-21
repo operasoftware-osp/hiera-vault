@@ -53,7 +53,7 @@ Puppet::Functions.create_function(:hiera_vault) do
 
   def normalize_key(key)
     # vault_storage::a::b::c::d -> a::b::c::d
-    key = key.split('vault_storage::')[1]
+    key = key.split("::")[1..key.length()].join("::");
     # a::b::c::d -> [a, b, c, d]
     key = key.split('::')
 
@@ -137,7 +137,7 @@ Puppet::Functions.create_function(:hiera_vault) do
     return allowed_mounts
   end
 
-  def build_mounts(segments, current_paths) 
+  def build_mounts(segments, current_paths)
     if segments.empty?
       return current_paths
     end
